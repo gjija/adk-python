@@ -430,6 +430,48 @@ def test_function_response_serializes_mcp_content_as_text():
   }]
 
 
+def test_function_response_sends_tool_images_after_text(caplog):
+  """Images a tool returns go in the list form of function_call_output."""
+  content = types.Content(
+      role='tool',
+      parts=[
+          types.Part(
+              function_response=types.FunctionResponse(
+                  id='call_123',
+                  name='tool',
+                  response={'status': 'ok'},
+                  parts=[
+                      types.FunctionResponsePart.from_bytes(
+                          data=b'image', mime_type='image/png'
+                      ),
+                      types.FunctionResponsePart.from_bytes(
+                          data=b'audio', mime_type='audio/wav'
+                      ),
+                  ],
+              )
+          )
+      ],
+  )
+
+  items = _content_to_response_input_items(content)
+
+  assert items == [{
+      'type': 'function_call_output',
+      'call_id': 'call_123',
+      'output': [
+          {'type': 'input_text', 'text': '{"status": "ok"}'},
+          {
+              'type': 'input_image',
+              'detail': 'auto',
+              'image_url': 'data:image/png;base64,aW1hZ2U=',
+          },
+      ],
+  }]
+  assert 'Dropping tool result media that is not an inline image.' in (
+      caplog.text
+  )
+
+
 def test_image_and_file_parts_use_responses_content_types():
   """Image and file parts become Responses input_image/input_file content."""
   content = types.Content(

@@ -43,12 +43,15 @@ try:
   from openai.types.responses import EasyInputMessageParam
   from openai.types.responses import FunctionToolParam
   from openai.types.responses import Response
+  from openai.types.responses import ResponseFunctionCallOutputItemParam
   from openai.types.responses import ResponseFunctionToolCall
   from openai.types.responses import ResponseFunctionToolCallParam
   from openai.types.responses import ResponseInputContentParam
   from openai.types.responses import ResponseInputFileParam
+  from openai.types.responses import ResponseInputImageContentParam
   from openai.types.responses import ResponseInputImageParam
   from openai.types.responses import ResponseInputItemParam
+  from openai.types.responses import ResponseInputTextContentParam
   from openai.types.responses import ResponseInputTextParam
   from openai.types.responses import ResponseOutputItem
   from openai.types.responses import ResponseOutputMessage
@@ -375,10 +378,28 @@ def _function_response_to_response_item(
     function_response: types.FunctionResponse,
     sanitizer: _CallIdSanitizer,
 ) -> FunctionCallOutput:
+  text = _serialize_json_value(function_response.response)
+  # Images the tool returned go after the text, in the list form of output.
+  items: list[ResponseFunctionCallOutputItemParam] = []
+  for response_part in function_response.parts or []:
+    blob = response_part.inline_data
+    if blob and blob.data and (blob.mime_type or '').startswith('image/'):
+      data = base64.b64encode(blob.data).decode('utf-8')
+      items.append(
+          ResponseInputImageContentParam(
+              type='input_image',
+              detail='auto',
+              image_url=f'data:{blob.mime_type};base64,{data}',
+          )
+      )
+    else:
+      logger.warning('Dropping tool result media that is not an inline image.')
+  if items and text:
+    items.insert(0, ResponseInputTextContentParam(type='input_text', text=text))
   return FunctionCallOutput(
       type='function_call_output',
       call_id=sanitizer.sanitize(function_response.id),
-      output=_serialize_json_value(function_response.response),
+      output=items or text,
   )
 
 
