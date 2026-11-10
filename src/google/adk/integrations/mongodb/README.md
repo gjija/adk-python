@@ -502,7 +502,7 @@ and separate database users keep the privileges separated:
 | :--- | :--- | :--- |
 | **Search user** (read-only) | `MongoDbToolset` | `find` on each collection the agent may search. |
 | **State user** (read-write) | `MongoDbSessionService` | `find`, `insert`, `update`, `remove` on `sessions` and `events` (session deletion); `find`, `insert`, `update` on `app_states` and `user_states` (upserts only, never deletes). Add `createIndex` on `sessions` and `events` so `ensure_indexes` (on by default) can work; without it the service logs one warning and falls back to unindexed reads, or pass `ensure_indexes=False` to opt out. |
-| **Memory user** (read-write) | `MongoDbMemoryService` | `find`, `insert`, `update`, `createIndex` on `memories` (upserts only, never deletes). `createIndex` lets `ensure_indexes` (on by default) build the recall and TTL indexes; without it the service logs one warning and falls back to unindexed reads, or drop it and pass `ensure_indexes=False` to opt out. In `"vector"`/`"auto"` modes, `ensure_indexes` also needs `listCollections`, `createCollection`, `listSearchIndexes` and `createSearchIndexes`; to keep those off the runtime user, create the vector index as an admin and pass `ensure_indexes=False`. With `memory_ttl_days` set, MongoDB's TTL monitor deletes expired memories. |
+| **Memory user** (read-write) | `MongoDbMemoryService` | `find`, `insert`, `update`, `remove`, `createIndex` on `memories`. `remove` lets `add_session_to_memory` delete the memories of turns a rewind took back; without it the service logs a warning and keeps them. `createIndex` lets `ensure_indexes` (on by default) build the recall and TTL indexes; without it the service logs one warning and falls back to unindexed reads, or drop it and pass `ensure_indexes=False` to opt out. In `"vector"`/`"auto"` modes, `ensure_indexes` also needs `listCollections`, `createCollection`, `listSearchIndexes` and `createSearchIndexes`; to keep those off the runtime user, create the vector index as an admin and pass `ensure_indexes=False`. With `memory_ttl_days` set, MongoDB's TTL monitor deletes expired memories. |
 
 ```javascript
 // mongosh, as an admin user: one read-only role for the search tools, and
@@ -532,7 +532,7 @@ db.createRole({
   privileges: [
     {
       resource: { db: "my_app", collection: "memories" },
-      actions: ["find", "insert", "update", "createIndex"],
+      actions: ["find", "insert", "update", "remove", "createIndex"],
     },
   ],
   roles: [],

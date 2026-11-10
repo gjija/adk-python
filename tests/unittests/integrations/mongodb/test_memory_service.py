@@ -24,6 +24,7 @@ from typing import Any
 from unittest import mock
 
 from google.adk.events.event import Event
+from google.adk.events.event_actions import EventActions
 from google.adk.integrations.mongodb import _client
 from google.adk.integrations.mongodb import MongoDbMemoryService
 from google.adk.sessions.session import Session
@@ -51,6 +52,7 @@ class _FakeCollection:
     }
     self.create_index_calls: int = 0
     self.create_index_error: Exception | None = None
+    self.delete_many_error: Exception | None = None
     self.bulk_write_calls: list[tuple[list[Any], bool]] = []
     self.last_pipeline: list[dict[str, Any]] | None = None
     self.search_index_models: list[Any] = []
@@ -113,6 +115,12 @@ class _FakeCollection:
     self.bulk_write_calls.append((list(requests), ordered))
     for req in requests:
       self.replace_one(req._filter, req._doc, upsert=req._upsert)
+
+  def delete_many(self, filter_doc: dict[str, Any]) -> None:
+    if self.delete_many_error is not None:
+      raise self.delete_many_error
+    for key in [k for k, d in self._docs.items() if _matches(d, filter_doc)]:
+      del self._docs[key]
 
   def aggregate(self, pipeline: list[dict[str, Any]]) -> list[dict[str, Any]]:
     self.last_pipeline = copy.deepcopy(pipeline)
@@ -648,6 +656,82 @@ async def test_reingesting_session_does_not_duplicate(
       app_name=APP, user_id=USER, query="hiking"
   )
   assert len(response.memories) == 1
+
+
+def _two_turn_session() -> Session:
+  events = [
+      Event(
+          id=f"e{i}",
+          invocation_id=f"inv{i}",
+          author="user",
+          content=types.Content(role="user", parts=[types.Part(text=text)]),
+          timestamp=float(i),
+      )
+      for i, text in ((1, "remember hiking"), (2, "remember skiing"))
+  ]
+  return Session(id="s1", app_name=APP, user_id=USER, events=events)
+
+
+def _rewind_event(rewind_before_invocation_id: str) -> Event:
+  return Event(
+      invocation_id="inv-rewind",
+      author="user",
+      timestamp=3.0,
+      actions=EventActions(
+          rewind_before_invocation_id=rewind_before_invocation_id
+      ),
+  )
+
+
+async def test_add_session_to_memory_skips_rewound_events(
+    service: MongoDbMemoryService,
+) -> None:
+  """Turns a rewind took back are not stored."""
+  session = _two_turn_session()
+  session.events.append(_rewind_event("inv2"))
+  await service.add_session_to_memory(session)
+
+  response = await service.search_memory(
+      app_name=APP, user_id=USER, query="remember"
+  )
+  assert [memory.id for memory in response.memories] == ["e1"]
+
+
+async def test_add_session_to_memory_deletes_previously_stored_rewound_events(
+    service: MongoDbMemoryService,
+) -> None:
+  """A turn memorized before it was rewound is deleted on the next add."""
+  session = _two_turn_session()
+  await service.add_session_to_memory(session)
+  session.events.append(_rewind_event("inv2"))
+  await service.add_session_to_memory(session)
+
+  response = await service.search_memory(
+      app_name=APP, user_id=USER, query="remember"
+  )
+  assert [memory.id for memory in response.memories] == ["e1"]
+
+
+async def test_add_session_to_memory_without_remove_privilege_warns(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+  """Without the remove privilege the live turns are still stored."""
+  client: Any = _FakeMongoClient()
+  svc = MongoDbMemoryService(mongo_client=client, database_name="test_db")
+  client["test_db"]["memories"].delete_many_error = _OperationFailure(
+      "denied", code=13
+  )
+  session = _two_turn_session()
+  session.events.append(_rewind_event("inv2"))
+
+  with caplog.at_level("WARNING"):
+    await svc.add_session_to_memory(session)
+
+  response = await svc.search_memory(
+      app_name=APP, user_id=USER, query="remember"
+  )
+  assert [memory.id for memory in response.memories] == ["e1"]
+  assert [r for r in caplog.records if "remove" in r.getMessage()]
 
 
 async def test_search_memory_deduplicates_identical_events(

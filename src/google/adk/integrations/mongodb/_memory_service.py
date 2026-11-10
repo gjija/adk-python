@@ -39,6 +39,7 @@ from typing_extensions import override
 
 from . import _client
 from . import _search_tool
+from ...events._rewind_events import _apply_rewinds
 from ...features import experimental
 from ...features import FeatureName
 from ...memory import _utils
@@ -550,11 +551,36 @@ class MongoDbMemoryService(BaseMemoryService):
 
   @override
   async def add_session_to_memory(self, session: Session) -> None:
-    """Ingests the session's text events into the memory collection."""
+    """Stores live events and deletes those a rewind took back."""
+    live_events = _apply_rewinds(session.events)
+    live_ids = {event.id for event in live_events}
+    scoped_session_id = session.id or _UNKNOWN_SESSION_ID
+    rewound_keys = [
+        self._memory_key(
+            session.app_name, session.user_id, scoped_session_id, event.id
+        )
+        for event in session.events
+        if event.id not in live_ids
+    ]
+    if rewound_keys:
+      try:
+        await asyncio.to_thread(
+            self._memories().delete_many, {"_id": {"$in": rewound_keys}}
+        )
+      except Exception as exc:  # pylint: disable=broad-exception-caught
+        if not _client.is_index_privilege_error(exc):
+          raise
+        logger.warning(
+            "MongoDbMemoryService could not delete the memories of rewound"
+            " events (remove privilege missing). Any stored before the rewind"
+            " can still be recalled. Grant remove on the memories collection."
+            " Details: %s",
+            exc,
+        )
     await self.add_events_to_memory(
         app_name=session.app_name,
         user_id=session.user_id,
-        events=session.events,
+        events=live_events,
         session_id=session.id,
     )
 
