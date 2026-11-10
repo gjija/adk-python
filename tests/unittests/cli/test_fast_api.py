@@ -1949,6 +1949,25 @@ def test_create_session_with_id_already_exists(test_app, test_session_info):
   logger.info("Verified 409 on duplicate session creation.")
 
 
+def test_create_session_returns_500_on_unexpected_error(
+    test_app, mock_session_service, test_session_info
+):
+  """Test create session reports unexpected errors as HTTP 500."""
+  url = f"/apps/{test_session_info['app_name']}/users/{test_session_info['user_id']}/sessions"
+  with patch.object(
+      mock_session_service,
+      "create_session",
+      side_effect=RuntimeError(
+          'connection to server at "10.0.0.5", port 5432 failed:'
+          ' password authentication failed for user "adk"'
+      ),
+  ):
+    response = test_app.post(url, json={"state": {}})
+
+  assert response.status_code == 500
+  assert response.json()["detail"] == "Failed to create session"
+
+
 def test_create_session_without_id(test_app, test_session_info):
   """Test creating a session with a generated ID."""
   url = f"/apps/{test_session_info['app_name']}/users/{test_session_info['user_id']}/sessions"

@@ -1457,7 +1457,9 @@ class ApiServer:
       logger.error(
           "Internal server error during session creation: %s", e, exc_info=True
       )
-      raise HTTPException(status_code=500, detail=str(e)) from e
+      raise HTTPException(
+          status_code=500, detail="Failed to create session"
+      ) from e
 
   def get_fast_api_app(
       self,
